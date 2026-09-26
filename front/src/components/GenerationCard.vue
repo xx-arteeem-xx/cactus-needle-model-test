@@ -8,6 +8,10 @@
       <span class="badge" :class="item.success ? 'ok' : 'fail'">
         {{ item.success ? 'ok' : (item.error_code || 'error') }}
       </span>
+      <span v-if="item.scenario_id" class="badge mono" title="Прогон по сценарию регресса">{{ item.scenario_id }}</span>
+      <span v-if="item.verdict" class="badge" :class="item.verdict === 'pass' ? 'pass' : 'fail'">
+        {{ item.verdict === 'pass' ? 'ожидание выполнено' : 'ожидание нарушено' }}
+      </span>
       <span v-if="item.confidence != null" class="conf">
         <span class="conf-track">
           <span

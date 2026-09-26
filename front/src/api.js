@@ -23,6 +23,7 @@ async function request(pathname, options = {}) {
 export const api = {
   meta: () => request('/meta'),
   generations: (limit = 50) => request(`/generations?limit=${limit}`),
+  scenarios: () => request('/scenarios'),
   stats: () => request('/stats'),
   generate: (payload) => request('/generate', { method: 'POST', body: JSON.stringify(payload) }),
   reset: () => request('/generations', { method: 'DELETE' }),

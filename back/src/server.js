@@ -6,16 +6,22 @@ import { query, ping as pingDb } from './db.js';
 import { cached, bust, ping as pingRedis, redisReady } from './cache.js';
 import { CHANGELOG } from './changelog.js';
 import { changelogMd } from './changelogMd.js';
+import { SCENARIOS, scenarioById } from './scenarios.js';
+import { verify } from './verify.js';
 
 const app = express();
 app.use(cors());
 app.use(express.json({ limit: '256kb' }));
+
+// Express 4 не ловит rejected promises в async-хендлерах — оборачиваем явно.
+const ah = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
 
 await redisReady;
 
 const KEYS = {
   generations: (limit) => `needle-bench:generations:${limit}`,
   stats: 'needle-bench:stats',
+  scenarios: 'needle-bench:scenarios',
 };
 
 function llmFetch(pathname, options = {}) {
@@ -39,15 +45,15 @@ async function getCatalog() {
   return catalogCache.data;
 }
 
-app.get('/api/health', async (_req, res) => {
+app.get('/api/health', ah(async (_req, res) => {
   const out = { ok: true, db: false, redis: false };
   try { await pingDb(); out.db = true; } catch { /* noop */ }
   try { await pingRedis(); out.redis = true; } catch { /* noop */ }
   out.ok = out.db && out.redis;
   res.status(out.ok ? 200 : 503).json(out);
-});
+}));
 
-app.get('/api/meta', async (_req, res) => {
+app.get('/api/meta', ah(async (_req, res) => {
   const catalog = await getCatalog();
   res.json({
     name: config.projectName,
@@ -56,11 +62,11 @@ app.get('/api/meta', async (_req, res) => {
     changelog_md: changelogMd,
     catalog,
   });
-});
+}));
 
 const MODES = new Set(['tools', 'extract']);
 
-app.post('/api/generate', async (req, res) => {
+app.post('/api/generate', ah(async (req, res) => {
   const body = req.body || {};
   const prompt = typeof body.prompt === 'string' ? body.prompt.trim() : '';
   if (!prompt) return res.status(400).json({ error: 'prompt is required' });
@@ -113,6 +119,24 @@ app.post('/api/generate', async (req, res) => {
   const roundtripMs = Date.now() - t0;
 
   const metrics = llm.metrics || {};
+  const scenarioId = typeof body.scenario_id === 'string' ? body.scenario_id : null;
+  if (scenarioId && !scenarioById[scenarioId]) {
+    return res.status(400).json({ error: `unknown scenario_id: ${scenarioId}` });
+  }
+  let verdict = null;
+  try {
+    const candidate = {
+      function_calls: llm.function_calls,
+      suppressed_calls: llm.suppressed_calls,
+      record: llm.record,
+    };
+    if (scenarioId && scenarioById[scenarioId].expect) {
+      verdict = verify(candidate, scenarioById[scenarioId].expect);
+    }
+  } catch (err) {
+    console.error('verify failed:', err);
+    verdict = { verdict: 'fail', detail: { checks: [], misses: [{ path: 'verifier', why: String(err?.message || err) }] } };
+  }
   const row = {
     iteration: config.projectVersion,
     mode: llm.mode,
@@ -137,6 +161,9 @@ app.post('/api/generate', async (req, res) => {
     prefill_tps: metrics.prefill_tps ?? null,
     decode_tps: metrics.decode_tps ?? null,
     est_output_tokens: metrics.est_output_tokens ?? null,
+    scenario_id: scenarioId,
+    verdict: verdict?.verdict ?? null,
+    verdict_detail: verdict ? JSON.stringify(verdict.detail) : null,
   };
 
   const inserted = await query(
@@ -144,19 +171,20 @@ app.post('/api/generate', async (req, res) => {
        (iteration, mode, toolset, schema_name, system_facts, max_new_tokens, model,
         prompt, response, function_calls, suppressed_calls, record, reasoning,
         confidence, success, error, error_code, latency_ms, roundtrip_ms,
-        prefill_tps, decode_tps, est_output_tokens)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)
+        prefill_tps, decode_tps, est_output_tokens, scenario_id, verdict, verdict_detail)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25)
      RETURNING *`,
     [row.iteration, row.mode, row.toolset, row.schema_name, row.system_facts,
      row.max_new_tokens, row.model, row.prompt, JSON.stringify(row.response),
      row.function_calls, row.suppressed_calls, row.record, row.reasoning,
      row.confidence, row.success, row.error, row.error_code, row.latency_ms,
-     row.roundtrip_ms, row.prefill_tps, row.decode_tps, row.est_output_tokens],
+     row.roundtrip_ms, row.prefill_tps, row.decode_tps, row.est_output_tokens,
+     row.scenario_id, row.verdict, row.verdict_detail],
   );
 
   await bust();
   res.status(201).json(shapeRow(inserted.rows[0]));
-});
+}));
 
 function shapeRow(r) {
   const json = (v) => (typeof v === 'string' ? JSON.parse(v) : v);
@@ -185,19 +213,37 @@ function shapeRow(r) {
     prefill_tps: r.prefill_tps,
     decode_tps: r.decode_tps,
     est_output_tokens: r.est_output_tokens,
+    scenario_id: r.scenario_id,
+    verdict: r.verdict,
+    verdict_detail: json(r.verdict_detail),
   };
 }
 
-app.get('/api/generations', async (req, res) => {
+app.get('/api/generations', ah(async (req, res) => {
   const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 50, 1), 500);
   const rows = await cached(KEYS.generations(limit), async () => {
     const r = await query('SELECT * FROM generations ORDER BY id DESC LIMIT $1', [limit]);
     return r.rows.map(shapeRow);
   });
   res.json({ items: rows, total: rows.length });
-});
+}));
 
-app.get('/api/stats', async (_req, res) => {
+app.get('/api/scenarios', ah(async (_req, res) => {
+  const latest = await cached(KEYS.scenarios, async () => {
+    const r = await query(`
+      SELECT DISTINCT ON (scenario_id) *
+      FROM generations
+      WHERE scenario_id IS NOT NULL
+      ORDER BY scenario_id, id DESC`);
+    return r.rows.map(shapeRow);
+  });
+  const byScenario = Object.fromEntries(latest.map((g) => [g.scenario_id, g]));
+  res.json({
+    items: SCENARIOS.map((s) => ({ ...s, last_run: byScenario[s.id] || null })),
+  });
+}));
+
+app.get('/api/stats', ah(async (_req, res) => {
   const stats = await cached(KEYS.stats, async () => {
     const main = await query(`
       SELECT
@@ -247,13 +293,13 @@ app.get('/api/stats', async (_req, res) => {
     };
   });
   res.json(stats);
-});
+}));
 
-app.delete('/api/generations', async (_req, res) => {
+app.delete('/api/generations', ah(async (_req, res) => {
   const r = await query('TRUNCATE generations RESTART IDENTITY');
   await bust();
   res.json({ ok: true, truncated: true, command: r.command });
-});
+}));
 
 app.use((err, _req, res, _next) => {
   console.error(err);

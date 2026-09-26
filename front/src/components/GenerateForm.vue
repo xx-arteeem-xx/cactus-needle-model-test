@@ -66,7 +66,7 @@ export default {
     submitting: { type: Boolean, default: false },
   },
 
-  emits: ['submit'],
+  emits: ['submit', 'change'],
 
   data() {
     return {
@@ -74,12 +74,20 @@ export default {
       mode: 'tools',
       surface: this.catalog?.toolsets?.[0]?.id || 'smart_home',
       systemFacts: '',
-      maxNewTokens: 512,
+      maxNewTokens: 768,
       error: null,
     };
   },
 
   computed: {
+    selection() {
+      return {
+        mode: this.mode,
+        surface: this.surface,
+        systemFacts: this.systemFacts,
+        prompt: this.prompt,
+      };
+    },
     surfaces() {
       return this.mode === 'tools' ? this.catalog.toolsets : this.catalog.schemas;
     },
@@ -94,6 +102,16 @@ export default {
     mode() {
       this.surface = this.surfaces[0]?.id;
     },
+    selection: {
+      deep: true,
+      handler() {
+        this.$emit('change', { ...this.selection });
+      },
+    },
+  },
+
+  created() {
+    this.$emit('change', { ...this.selection });
   },
 
   methods: {

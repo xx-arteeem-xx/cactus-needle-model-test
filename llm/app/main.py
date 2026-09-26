@@ -49,7 +49,14 @@ def _schema_as_tool(schema_id: str) -> list[dict]:
     return [
         {
             "name": "record",
-            "description": entry.get("record_description", "Record the extracted fields."),
+            "description": entry.get(
+                "record_description",
+                "Record the extracted fields found in the user text.",
+            ),
+            # The catch-all trigger forces the record call for every request:
+            # without it the engine reads imperative phrases in the text
+            # ("give me a call") as tool requests and refuses to extract.
+            "triggers": [".*"],
             "parameters": entry["schema"],
         }
     ]
@@ -170,7 +177,9 @@ def info() -> dict:
 
 @app.get("/health")
 def health() -> dict:
-    return {"ok": _ready.is_set(), "model": MODEL_NAME}
+    if not _ready.is_set():
+        raise HTTPException(status_code=503, detail="model is warming up")
+    return {"ok": True, "model": MODEL_NAME}
 
 
 def _warmup() -> None:

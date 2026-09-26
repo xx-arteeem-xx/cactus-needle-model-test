@@ -5,10 +5,11 @@
         <a href="#top" class="wordmark">needle<span class="dot">·</span>bench</a>
         <nav class="nav">
           <a href="#model">Модель</a>
+          <a href="#workflow">Как идёт запрос</a>
+          <a href="#scenarios">Сценарии</a>
           <a href="#lab">Эксперимент</a>
           <a href="#journal">Журнал</a>
           <a href="#summary">Сводка</a>
-          <a href="#versions">Версии</a>
           <span v-if="meta" class="version-pill">v{{ meta.version }}</span>
         </nav>
       </div>
@@ -76,54 +77,69 @@
         </div>
       </section>
 
-      <!-- ============ 02 LAB ============ -->
-      <section id="lab" class="section">
+      <!-- ============ 02 WORKFLOW ============ -->
+      <section id="workflow" class="section">
         <div class="section-head">
           <span class="section-index">02</span>
-          <h2 class="section-title">Эксперимент</h2>
+          <h2 class="section-title">Что происходит при прогоне</h2>
         </div>
         <p class="section-sub">
-          Запрос уходит в бэкенд, передаётся модели и возвращается записью: решение,
-          обоснование аргументов, достоверность, тайминги и скорость декодирования.
-          Прогон сохраняется в базу и попадает в журнал испытаний ниже.
+          У Needle нет свободного текстового промпта: «промпт» модели собирается из трёх
+          частей — JSON-схем инструментов, фактов о среде и текста запроса. Из схем
+          компилируется байтовая грамматика, которая ограничивает каждый токен декодирования,
+          поэтому структура ответа корректна всегда. Полный путь запроса:
         </p>
-
-        <div class="steps">
-          <div class="step">
-            <div class="step-num">ШАГ 1</div>
-            <div class="step-title">Запрос</div>
-            <div class="step-text">
-              Команда для инструментов или исходный текст для извлечения — в свободной форме.
-            </div>
-          </div>
-          <div class="step">
-            <div class="step-num">ШАГ 2</div>
-            <div class="step-title">Поверхность</div>
-            <div class="step-text">
-              Набор инструментов (умный дом, медиа, продуктивность, платежи) или схема извлечения.
-            </div>
-          </div>
-          <div class="step">
-            <div class="step-num">ШАГ 3</div>
-            <div class="step-title">Прогон</div>
-            <div class="step-text">
-              Ответ появится в карточке под формой и строкой в журнале испытаний.
-            </div>
-          </div>
-        </div>
-
-        <GenerateForm
-          v-if="catalog"
-          :catalog="catalog"
-          :submitting="submitting"
-          @submit="runGeneration"
-        />
+        <WorkflowSteps />
       </section>
 
-      <!-- ============ 03 JOURNAL ============ -->
-      <section id="journal" class="section">
+      <!-- ============ 03 SCENARIOS ============ -->
+      <section id="scenarios" class="section">
         <div class="section-head">
           <span class="section-index">03</span>
+          <h2 class="section-title">Сценарии регресса</h2>
+        </div>
+        <p class="section-sub">
+          Протокол испытаний стенда: каждый сценарий — реальный запрос с зафиксированным
+          ожиданием. Кнопка «Прогнать» отправляет запрос по полному контуру, ответ модели
+          автоматически сверяется с ожиданием, вердикт сохраняется в базу.
+        </p>
+
+        <ScenarioBoard :scenarios="scenarios" :running="runningScenario" @run="runScenario" />
+      </section>
+
+      <!-- ============ 04 LAB ============ -->
+      <section id="lab" class="section">
+        <div class="section-head">
+          <span class="section-index">04</span>
+          <h2 class="section-title">Ручной эксперимент</h2>
+        </div>
+        <p class="section-sub">
+          Произвольный запрос к любой поверхности. Справа — точный вид того, что уйдёт
+          в модель: схемы инструментов, факты о среде и текст запроса.
+        </p>
+
+        <div class="lab-grid">
+          <div>
+            <GenerateForm
+              v-if="catalog"
+              :catalog="catalog"
+              :submitting="submitting"
+              @submit="runGeneration"
+              @change="onSelectionChange"
+            />
+          </div>
+          <PromptPanel
+            v-if="catalog && selection"
+            :catalog="catalog"
+            :selection="selection"
+          />
+        </div>
+      </section>
+
+      <!-- ============ 05 JOURNAL ============ -->
+      <section id="journal" class="section">
+        <div class="section-head">
+          <span class="section-index">05</span>
           <h2 class="section-title">Журнал испытаний</h2>
         </div>
         <p class="section-sub">
@@ -135,10 +151,10 @@
         <GenerationList :items="generations" :loading="loadingList" />
       </section>
 
-      <!-- ============ 04 SUMMARY ============ -->
+      <!-- ============ 06 SUMMARY ============ -->
       <section id="summary" class="section">
         <div class="section-head">
-          <span class="section-index">04</span>
+          <span class="section-index">06</span>
           <h2 class="section-title">Сводка по серии</h2>
         </div>
         <p class="section-sub">
@@ -149,10 +165,10 @@
         <DashboardPanel :stats="stats" />
       </section>
 
-      <!-- ============ 05 VERSIONS ============ -->
+      <!-- ============ 07 VERSIONS ============ -->
       <section id="versions" class="section">
         <div class="section-head">
-          <span class="section-index">05</span>
+          <span class="section-index">07</span>
           <h2 class="section-title">Версии стенда</h2>
         </div>
         <p class="section-sub">
@@ -183,6 +199,9 @@ import GenerateForm from './components/GenerateForm.vue';
 import GenerationList from './components/GenerationList.vue';
 import DashboardPanel from './components/DashboardPanel.vue';
 import ChangelogPanel from './components/ChangelogPanel.vue';
+import ScenarioBoard from './components/ScenarioBoard.vue';
+import WorkflowSteps from './components/WorkflowSteps.vue';
+import PromptPanel from './components/PromptPanel.vue';
 
 export default {
   name: 'App',
@@ -192,17 +211,22 @@ export default {
     GenerationList,
     DashboardPanel,
     ChangelogPanel,
+    ScenarioBoard,
+    WorkflowSteps,
+    PromptPanel,
   },
 
   data() {
     return {
       meta: null,
       generations: [],
+      scenarios: [],
       stats: null,
       loadingList: false,
       submitting: false,
+      runningScenario: null,
       loadError: null,
-      lastError: null,
+      selection: null,
     };
   },
 
@@ -214,7 +238,8 @@ export default {
 
   async created() {
     await this.loadMeta();
-    await Promise.all([this.loadGenerations(), this.loadStats()]);
+    this.selection = { mode: 'tools', surface: 'smart_home', systemFacts: '', prompt: '' };
+    await this.refresh();
   },
 
   methods: {
@@ -224,6 +249,13 @@ export default {
       } catch (e) {
         this.loadError = e.message;
       }
+    },
+    async refresh() {
+      await Promise.all([
+        this.loadGenerations(),
+        this.loadScenarios(),
+        this.loadStats(),
+      ]);
     },
     async loadGenerations() {
       this.loadingList = true;
@@ -236,6 +268,14 @@ export default {
         this.loadingList = false;
       }
     },
+    async loadScenarios() {
+      try {
+        const data = await api.scenarios();
+        this.scenarios = data.items;
+      } catch (e) {
+        // scenarios are non-critical at page load
+      }
+    },
     async loadStats() {
       try {
         this.stats = await api.stats();
@@ -243,17 +283,32 @@ export default {
         // dashboard is non-critical
       }
     },
+    onSelectionChange(sel) {
+      this.selection = sel;
+    },
     async runGeneration(payload) {
       this.submitting = true;
-      this.lastError = null;
       try {
         await api.generate(payload);
-        await Promise.all([this.loadGenerations(), this.loadStats()]);
-      } catch (e) {
-        this.lastError = e.message;
-        throw e;
+        await this.refresh();
       } finally {
         this.submitting = false;
+      }
+    },
+    async runScenario(scenario) {
+      this.runningScenario = scenario.id;
+      try {
+        await api.generate({
+          scenario_id: scenario.id,
+          prompt: scenario.prompt,
+          mode: scenario.mode,
+          toolset: scenario.toolset,
+          schema_name: scenario.schema_name,
+          system_facts: scenario.system_facts,
+        });
+        await this.refresh();
+      } finally {
+        this.runningScenario = null;
       }
     },
   },

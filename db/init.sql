@@ -22,7 +22,10 @@ CREATE TABLE IF NOT EXISTS generations (
     roundtrip_ms      INTEGER     NOT NULL,
     prefill_tps       REAL,
     decode_tps        REAL,
-    est_output_tokens INTEGER
+    est_output_tokens INTEGER,
+    scenario_id       TEXT,
+    verdict           TEXT,
+    verdict_detail    JSONB
 );
 
 CREATE INDEX IF NOT EXISTS idx_generations_created_at ON generations (created_at DESC);
